@@ -1,0 +1,426 @@
+apiVersion: devops.alauda.io/v1alpha1
+kind: PipelineTemplate
+metadata:
+  name: demopipeline
+  annotations:
+    alauda.io/displayName.zh-CN: 构建并部署服务
+    alauda.io/displayName.en: BuildImageDeploy
+    alauda.io/description.zh-CN: 镜像构建并部署服务
+    alauda.io/description.en: Clone code, Build Image, Deploy Service
+    alauda.io/readme.zh-CN: 构建镜像自动部署
+    alauda.io/readme.en: Clone code, Build Image, Deploy Service
+    alauda.io/version: v0.2.6
+    alauda.io/style.icon: docker
+  labels:
+    category: cicd
+spec:
+  engine: graph
+  withSCM: true
+  stages:
+    - name: Clone
+      tasks:
+        - name: Clone
+          type: public/clone
+    - name: BuildImage
+      tasks:
+        - name: BuildImage
+          type: alauda/buildImage
+          options:
+            timeout: 3600
+    - name: DeployService
+      tasks:
+        - name: DeployService
+          type: public/newalaudaDeployService
+          options:
+            timeout: 3600
+    - name: SyncImage
+      tasks:
+        - name: SyncImage
+          type: alauda/syncImage
+          relation:
+            - action: show
+              when:
+                name: enableSyncImage
+                value: true
+            - action: hidden
+              when:
+                name: enableSyncImage
+                value: false
+  arguments:
+    - displayName:
+        zh-CN: "配置持续集成"
+        en: "CI Configuration"
+      items:
+        - name: "contextDir"
+          schema:
+            type: string
+          binding:
+            - BuildImage.args.contextDir
+          display:
+            type: string
+            name:
+              zh-CN: "构建路径"
+              en: "Build context"
+            description:
+              zh-CN: 构建命令的执行目录
+              en: Path of ci command executing
+          required: true
+          default: ./
+        - name: "ciImage"
+          schema:
+            type: alauda.io/imagerepositorymix
+          binding:
+            - BuildImage.args.ciImage
+          display:
+            type: alauda.io/imagerepositorymix
+            name:
+              zh-CN: "CI镜像"
+              en: "CI Image"
+            description:
+              zh-CN: 用来执行构建的镜像
+              en: Image to execute comand
+          required: false
+        - name: "ciImageTag"
+          schema:
+            type: string
+          binding:
+            - BuildImage.args.ciImageTag
+          display:
+            type: alauda.io/imagetag
+            related: ciImage
+            name:
+              zh-CN: "CI镜像Tag"
+              en: "CI image tag"
+            description:
+              zh-CN: 用来执行构建的镜像的TAG
+              en: Tag of image to execute comand
+          required: false
+        - name: ciImageRegistryCredentialsId
+          schema:
+            type: string
+          binding:
+            - BuildImage.args.ciImageRegistryCredentialsId
+          display:
+            type: alauda.io/jenkinscredentials
+            related: jenkins_integration_id
+            name:
+              zh-CN: "CI镜像：镜像中心凭据"
+              en: "CI image: Registry credentials"
+            description:
+              zh-CN: 用来执行构建的镜像的Registry凭据（用户名密码）
+              en: Credential of ci image registry
+          required: false
+        - name: "enableCMD"
+          schema:
+            type: boolean
+          binding:
+            - BuildImage.args.enableCMD
+          display:
+            type: boolean
+            name:
+              zh-CN: "使用自定义命令"
+              en: "Enable Command"
+            description:
+              zh-CN: "是否使用自定义命令"
+              en: "use command to test"
+          default: false
+          required: false
+        - name: "cmd"
+          schema:
+            type: string
+          binding:
+            - BuildImage.args.cmd
+          display:
+            type: shellscripts
+            name:
+              zh-CN: "自定义命令"
+              en: "Command"
+            description:
+              zh-CN: "自定义命令的内容"
+              en: "use command to test"
+          required: false
+          relation:
+            - action: show
+              when:
+                name: enableCMD
+                value: true
+            - action: hidden
+              when:
+                name: enableCMD
+                value: false
+        - name: "saveUnittestReport"
+          schema:
+            type: boolean
+          binding:
+            - BuildImage.args.saveUnittestReport
+          display:
+            type: boolean
+            name:
+              zh-CN: "保存单元测试报告"
+              en: "保存单元测试报告"
+            description:
+              zh-CN: "如果在自定义命令中执行了单元测试，则需要显示勾选保存测试报告"
+              en: "save Junit test report"
+          default: false
+          required: false
+          relation:
+            - action: show
+              when:
+                name: enableCMD
+                value: true
+            - action: hidden
+              when:
+                name: enableCMD
+                value: false
+        - name: "enableUnittest"
+          schema:
+            type: boolean
+          binding:
+            - BuildImage.args.enableUnittest
+          display:
+            type: boolean
+            name:
+              zh-CN: "开启单元测试"
+              en: "Enable Unittest"
+          default: true
+          required: false
+          relation:
+            - action: show
+              when:
+                name: enableCMD
+                value: false
+            - action: hidden
+              when:
+                name: enableCMD
+                value: true
+    - displayName:
+        zh-CN: 配置镜像仓库 
+        en: Image Repository Configuration
+      items:
+        - name: "dockerfilePath"
+          schema:
+            type: string
+          binding:
+            - BuildImage.args.dockerfilePath
+          display:
+            type: string
+            name:
+              zh-CN: "Dockerfile路径"
+              en: "Dockerfile's path"
+            description:
+              zh-CN: Dockerfile的路径，不包含名称，例如当前目录./
+              en: Path of Dockerfile, eg ./
+          required: true
+          default: ./
+        - name: "image"
+          schema:
+            type: alauda.io/imagerepositorymix
+          binding:
+            - BuildImage.args.image
+            - DeployService.args.image
+            - SyncImage.args.sourceImage
+          display:
+            type: alauda.io/imagerepositorymix
+            name:
+              zh-CN: "镜像仓库"
+              en: "Image repository"
+            description:
+              zh-CN: "构建生成的镜像"
+              en: "Image repository to store the built image"
+          required: true
+        - name: "imageTag"
+          schema:
+            type: string
+          binding:
+            - BuildImage.args.imageTag
+          display:
+            type: string
+            name:
+              zh-CN: "镜像版本"
+              en: "Customized image tag"
+            description:
+              zh-CN: "镜像版本, 例如 latest"
+              en: "Customized image tag"
+          default: "latest"
+          required: true
+        - name: imageExtraTag
+          schema:
+            type: string
+          binding:
+            - BuildImage.args.imageExtraTag
+            - DeployService.args.imageTag
+            - SyncImage.args.sourceImageTag
+          display:
+            type: string
+            name:
+              zh-CN: "附加版本"
+              en: "Auto generated tag"
+            description:
+              zh-CN: "将会使用该版本的镜像更新服务"
+              en: "Used to update service"
+          required: true
+        - name: imageRegistryCredentialsId
+          schema:
+            type: string
+          binding:
+            - BuildImage.args.imageRegistryCredentialsId
+            - SyncImage.args.sourceRegistryCredentialsId
+          display:
+            type: alauda.io/jenkinscredentials
+            related: jenkins_integration_id
+            name:
+              zh-CN: "镜像中心凭据"
+              en: "Registry credentials"
+            description:
+              zh-CN: "构建的目标镜像所在镜像中心的登录凭据"
+              en: "Credentials of target registry"
+          required: false
+        - name: "useImageCache"
+          schema:
+            type: boolean
+          binding:
+            - BuildImage.args.useImageCache
+          display:
+            type: boolean
+            name:
+              zh-CN: "开启镜像缓存"
+              en: "Use image cache"
+          default: true
+          required: false
+    - displayName:
+        zh-CN: 更新服务 
+        en: Deploy Service
+      items:
+        - name: containerInfo
+          schema:
+            type: alauda.io/v1newk8scontainermix
+          binding:
+            - DeployService.args.containerInfo
+          display:
+            type: alauda.io/v1newk8scontainermix
+            name:
+              zh-CN: "容器"
+              en: "Container"
+            description:
+              zh-CN: "即将被更新的服务的容器"
+              en: "Container of service that will update"
+          required: true
+        - name: command
+          schema:
+            type: string
+          binding:
+            - DeployService.args.command
+          display:
+            type: string
+            name:
+              zh-CN: "接入点"
+              en: "Entrypoint"
+            description:
+              zh-CN: "容器启动时执行的接入点，如果不指定，则使用原有服务接入点"
+              en: "Entrypoint of container, , using original service command if it is empty"
+          required: false
+        - name: args
+          schema:
+            type: string
+          binding:
+            - DeployService.args.args
+          display:
+            type: string
+            name:
+              zh-CN: "执行命令"
+              en: "Run Command"
+            description:
+              zh-CN: "容器启动时执行的命令，如果不指定，则使用原有服务命令"
+              en: "Command of container, using original service command if it is empty"
+          required: false
+        - name: env
+          schema:
+            type: alauda.io/k8senv
+          binding:
+            - DeployService.args.env
+          display:
+            type: alauda.io/k8senv
+            name:
+              zh-CN: "环境变量"
+              en: "Environment variables"
+            description:
+              zh-CN: "环境变量"
+              en: "Environment variables"
+        - name: timeout
+          schema:
+            type: int
+          binding:
+            - DeployService.args.timeout
+          display:
+            type: int
+            name:
+              zh-CN: "超时时间（秒）"
+              en: "Timeout (s)"
+            description:
+              zh-CN: "超时时间（秒）"
+              en: "Timeout (s)"
+          required: true
+    - displayName:
+        zh-CN: 同步镜像
+        en: Sync Image
+      items:
+        - name: "enableSyncImage"
+          schema:
+            type: boolean
+          binding:
+            - SyncImage.args.enableSyncImage
+          display:
+            type: boolean
+            name:
+              zh-CN: "开启镜像同步"
+              en: "Enable Sync Image"
+            description:
+              zh-CN: "是否开启镜像同步,如果开启，则可以将构建生成的镜像同步到另外一个 Registry"
+              en: "Enable Sync Image"
+          default: false
+          required: false
+        - name: "targetRegistry"
+          schema:
+            type: string
+          binding:
+            - SyncImage.args.targetRegistry
+          display:
+            type: string
+            name:
+              zh-CN: "目标镜像仓库"
+              en: "Target Image"
+            description:
+              zh-CN: "目标镜像仓库的地址， 例如：10.1.1.1:5000"
+              en: "Target registry address"
+          default: "11.11.157.191:5000"
+          required: true
+          relation:
+            - action: show
+              when:
+                name: enableSyncImage
+                value: true
+            - action: hidden
+              when:
+                name: enableSyncImage
+                value: false
+        - name: targetRegistryCredentialsId
+          schema:
+            type: string
+          binding:
+            - SyncImage.args.targetRegistryCredentialsId
+          display:
+            type: alauda.io/jenkinscredentials
+            related: jenkins_integration_id
+            name:
+              zh-CN: "目标仓库凭据"
+              en: "registry credential"
+          required: false
+          relation:
+            - action: show
+              when:
+                name: enableSyncImage
+                value: true
+            - action: hidden
+              when:
+                name: enableSyncImage
+                value: false

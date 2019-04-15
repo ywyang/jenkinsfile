@@ -1,0 +1,140 @@
+apiVersion: devops.alauda.io/v1alpha1
+kind: PipelineTaskTemplate
+metadata:
+  name: syncImage
+  annotations:
+    alauda.io/displayName.zh-CN: 同步镜像
+    alauda.io/displayName.en: Sync Image
+    alauda.io/description.zh-CN: 同步镜像
+    alauda.io/description.en: 同步镜像
+    alauda.io/readme.zh-CN: 同步镜像
+    alauda.io/readme.en: 同步镜像
+    alauda.io/version: v0.1.6
+    alauda.io/style.icon: 
+spec:
+  engine: gotpl
+  body: |+
+    {{- if .needApprove}}
+    timeout(time: 120, unit: 'HOURS'){
+      input message:"是否需要同步镜像？"
+    }
+    {{- end}}
+    script{
+      def getTargetImage = {
+        def segments = "{{.targetRegistry}}".split("/").findAll{item->item.size()>0}
+        // format must be xx.xx.xx.xx
+        if(segments.size() == 1){
+          def tImage = segments[0]+"/{{.sourceImage.repository}}:{{.sourceImageTag}}"
+          echo "target image will be ${tImage}"
+          return tImage
+        }
+
+        // format must be xx.xx.xx.xx/xxx
+        if(segments.size() == 2){
+          def sourceSegments = "{{.sourceImage.repository}}".split("/").findAll{item->item.size()>0}
+          def tImage = segments[0]+"/"+segments[1]+"/"+sourceSegments[1]+":{{.sourceImageTag}}"
+          echo "target image will be ${tImage}"
+          return tImage
+        }
+        // format must be xx.xx.xx.xx/xxx/xxx:xxx
+        if(segments.size() == 3){
+          println "target image will be {{.targetRegistry}}"
+          return "{{.targetRegistry}}"
+        }
+        echo "{{.targetRegistry}} is unknown format, will use it as target image "
+        return "{{.targetRegistry}}"
+      }
+
+      timeout(time: 1, unit: 'HOURS') {
+        def tImage = getTargetImage()
+        {{- if .sourceRegistryCredentialsId}}
+        withCredentials([usernamePassword(credentialsId: "{{.sourceRegistryCredentialsId}}", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+            sh "docker login {{.sourceImage.registry}} -u $USERNAME -p $PASSWORD"
+        {{- end}}
+            retry(3) {
+                sh "docker pull {{.sourceImage.registry}}/{{.sourceImage.repository}}:{{.sourceImageTag}}"
+            }
+            sh "docker tag {{.sourceImage.registry}}/{{.sourceImage.repository}}:{{.sourceImageTag}} ${tImage}"
+        {{- if .sourceRegistryCredentialsId}}
+        }
+        {{- end}}
+
+        {{- if .targetRegistryCredentialsId}}
+        withCredentials([usernamePassword(credentialsId: "{{.targetRegistryCredentialsId}}", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+            sh "docker login {{.targetRegistry}} -u $USERNAME -p $PASSWORD"
+        {{- end}}
+            retry(3) {
+              sh "docker push ${tImage}"
+            }
+        {{- if .targetRegistryCredentialsId}}
+        }
+        {{- end}}
+      }
+
+    }
+  arguments:
+    - name: "needApprove"
+      schema:
+        type: boolean
+      display:
+        type: boolean
+        name:
+          zh-CN: "开启同步审核"
+          en: "Enable Sync Approve"
+        description:
+          zh-CN: "开启后，将会在审核通过后， 再进行镜像同步"
+          en: "Will sync image after approved"
+      required: false
+      default: true
+    - name: "sourceImage"
+      schema:
+        type: alauda.io/imagerepositorymix
+      display:
+        type: alauda.io/imagerepositorymix
+        name:
+          zh-CN: "源镜像地址"
+          en: "Source Image"
+      required: true
+    - name: "sourceImageTag"
+      schema:
+        type: string
+      display:
+#        type: alauda.io/imagetag
+#        related: sourceImage
+        type: string #手动输入tag
+        name:
+          zh-CN: "源镜像Tag"
+          en: "Source Image Tag"
+      required: true
+    - name: sourceRegistryCredentialsId
+      schema:
+        type: string
+      display:
+        type: alauda.io/jenkinscredentials
+        related: jenkins_integration_id
+        name:
+          zh-CN: "源仓库凭据"
+          en: "registry credential"
+      required: false
+    - name: "targetRegistry"
+      schema:
+        type: string
+      display:
+        type: string
+        name:
+          zh-CN: "目标镜像仓库"
+          en: "Target Image"
+        description:
+          zh-CN: "目标镜像仓库的地址， 例如：10.1.1.1:5000"
+          en: "Target registry address"
+      required: true
+    - name: targetRegistryCredentialsId
+      schema:
+        type: string
+      display:
+        type: alauda.io/jenkinscredentials
+        related: jenkins_integration_id
+        name:
+          zh-CN: "目标仓库凭据"
+          en: "registry credential"
+      required: false

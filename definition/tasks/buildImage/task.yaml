@@ -1,0 +1,355 @@
+apiVersion: devops.alauda.io/v1alpha1
+kind: PipelineTaskTemplate
+metadata:
+  name: buildImage
+  annotations:
+    alauda.io/displayName.zh-CN: 构建镜像
+    alauda.io/displayName.en: build image
+    alauda.io/description.zh-CN: 构建镜像
+    alauda.io/description.en: build image
+    alauda.io/readme.zh-CN: 构建镜像 
+    alauda.io/readme.en: 构建镜像
+    alauda.io/version: v0.1.15
+    alauda.io/style.icon: 
+spec:
+  engine: gotpl
+  body: |+
+    script{
+      def getVolumes = {
+        def volumes = [
+          hostPathVolume(hostPath: '/var/run/docker.sock', mountPath: '/var/run/docker.sock'),
+          hostPathVolume(hostPath: '/jenkins/data/.m2/repository', mountPath: '/root/.m2/repository/')
+        ]
+        return volumes
+      }
+
+      def safePath = { String path ->
+            if(path.startsWith("/")){
+                return "." + path
+            }
+            return path
+      }
+
+      def execCmds = {
+        def cmdstr = ""
+        {{- if .enableCMD}}
+        cmdstr = '''{{.cmd}}'''
+        {{- else}}
+        def cmds = []
+        {{- if .enableUnittest }}
+        cmds << "mvn test"
+        {{- end}}
+        cmds << "mvn package -Dmaven.test.skip=true"
+        {{- if .enableDeployNexus}}
+        cmds << "mvn deploy -Dmaven.test.skip=true"
+        {{- end}}
+        cmdstr = cmds.join("\n")
+        {{- end}}
+
+        return {
+          try{
+            sh cmdstr
+          }
+          finally{
+            {{- if and .enableCMD .saveUnittestReport}}
+            junit 'target/surefire-reports/*.xml'
+            {{- end}}
+            {{- if eq .enableCMD false}}
+            {{- if .enableUnittest}}
+            junit 'target/surefire-reports/*.xml'
+            {{- end}}
+            {{- end}}
+          }
+        }
+      }
+
+      def ciImage = "{{.ciImage.registry}}/{{.ciImage.repository}}:{{.ciImageTag}}"
+      def contextPath = safePath("{{.contextDir}}")
+      
+      stash "alaudaciSource"
+      def registry = alauda.parseRegistry("${ciImage}")
+      def label = "ci-node-${UUID.randomUUID().toString()}"
+
+      podTemplate(
+              label: label,
+              containers:[
+                      containerTemplate(name: 'ci-container', image: "${ciImage}", ttyEnabled: true,
+                          envVars: [envVar(key: "LANG", value: "C.UTF-8")],  resourceLimitCpu: '1', resourceLimitMemory: '1G', resourceRequestCpu: '1', resourceRequestMemory: '1G')
+              ],
+              nodeUsageMode: "EXCLUSIVE",
+              volumes: getVolumes(),
+              imagePullSecrets: [ '{{.ciImageRegistryCredentialsId}}' ],
+              inheritFrom: 'base'
+      ){
+        node(label) {
+          container('ci-container') {
+              def dest = "${env.WORKSPACE}/__dest__"
+              def source = "${env.WORKSPACE}/__source__"
+              def bin = "${env.WORKSPACE}/__bin__"
+              def upload = "${env.WORKSPACE}/__upload__"
+              sh "mkdir -p ${dest}"
+
+              dir("./__source__"){
+                  unstash "alaudaciSource"
+                  withEnv([
+                          "ALAUDACI_DEST_DIR=${dest}","ALAUDACI_SOURCE_DIR=${source}", "ALAUDACI_BIN_DIR=${bin}", "ALAUDACI_UPLOAD_DIR=${upload}"
+                  ]){
+                      dir("${contextPath}"){
+                          execCmds()()
+                      }
+                  }
+
+                  def count = sh(script: "ls -A ${dest} |wc -w", returnStdout:true).trim()
+                  if(count == "0"){
+                      echo "dest directory is empty, will copy source directory to dest"
+                      sh "cp -r ./ ${dest}"
+                  }
+              }
+
+              dir("./__dest__"){
+                  stash "alaudaciDest"
+              }
+          }
+        }
+      }
+
+      {{- if .buildImageEnabled}}
+      // build image
+      unstash "alaudaciDest"
+      {{- if .imageRegistryCredentialsId}}
+        withCredentials([usernamePassword(credentialsId: '{{.imageRegistryCredentialsId}}', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]){
+            retry(3){
+              sh 'docker login {{.image.registry}} -u ${USERNAME} -p ${PASSWORD}'
+            }
+        }
+      {{- end}}
+      def image = alauda.build().
+        setDockerfileLocation("{{.dockerfilePath}}").
+        setContextPath("{{.contextDir}}").
+        setUseImageCache({{.useImageCache}}).
+        setImage("{{.image.registry}}/{{.image.repository}}:{{.imageTag}}").
+        startBuildImage()
+
+      retry(3){
+        image.withRegistry([
+          credentialsId: "{{.imageRegistryCredentialsId}}",
+          url: "{{.image.registry}}"
+        ]).push("{{.imageExtraTag}}")
+      }
+      {{- end}}
+    }
+  arguments:
+    - name: "dockerfilePath"
+      schema:
+        type: string
+      display:
+        type: string
+        name:
+          zh-CN: "Dockerfile路径"
+          en: "path of Dockerfile"
+      required: true
+      default: ./
+      relation:
+        - action: show
+          when:
+            name: buildImageEnabled
+            value: true
+    - name: "contextDir"
+      schema:
+        type: string
+      display:
+        type: string
+        name:
+          zh-CN: "构建路径"
+          en: "path of build"
+      required: true
+      default: ./
+    - name: "ciImage"
+      schema:
+        type: alauda.io/imagerepositorymix
+      display:
+        type: alauda.io/imagerepositorymix
+        name:
+          zh-CN: "CI镜像"
+          en: "CI Image"
+      required: false
+    - name: "ciImageTag"
+      schema:
+        type: string
+      display:
+        type: alauda.io/imagetag
+        related: ciImage
+        name:
+          zh-CN: "CI镜像Tag"
+          en: "CI Image Tag"
+      required: false
+    - name: "buildImageEnabled"
+      schema:
+        type: boolean
+      display:
+        type: boolean
+        name:
+          zh-CN: "是否构建镜像"
+          en: "Enable Build Image"
+      default: true
+      required: false
+    - name: "image"
+      schema:
+        type: alauda.io/imagerepositorymix
+      display:
+        type: alauda.io/imagerepositorymix
+        name:
+          zh-CN: "构建生成的镜像"
+          en: "image"
+        description:
+          zh: "构建生成的镜像"
+          en: "image name that will build"
+      required: true
+      relation:
+        - action: show
+          when:
+            name: buildImageEnabled
+            value: true
+    - name: "imageTag"
+      schema:
+        type: string
+      display:
+        type: string
+        name:
+          zh-CN: "镜像版本"
+          en: "image tag"
+      default: "latest"
+      required: true
+      relation:
+        - action: show
+          when:
+            name: buildImageEnabled
+            value: true
+    - name: "useImageCache"
+      schema:
+        type: boolean
+      display:
+        type: boolean
+        name:
+          zh-CN: "开启镜像缓存"
+          en: "Use Image Cache"
+      default: true
+      required: true
+    - name: imageExtraTag
+      schema:
+        type: string
+      display:
+        type: string
+        name:
+          zh-CN: "附加版本号"
+          en: "extra image tag"
+      default: latest
+      required: false
+      relation:
+        - action: show
+          when:
+            name: buildImageEnabled
+            value: true
+    - name: ciImageRegistryCredentialsId
+      schema:
+        type: string
+      display:
+        type: alauda.io/jenkinscredentials
+        related: jenkins_integration_id
+        name:
+          zh-CN: "registry凭据"
+          en: "registry credential"
+      required: false
+    - name: imageRegistryCredentialsId
+      schema:
+        type: string
+      display:
+        type: alauda.io/jenkinscredentials
+        related: jenkins_integration_id
+        name:
+          zh-CN: "registry凭据"
+          en: "registry credential"
+      required: false
+      relation:
+        - action: show
+          when:
+            name: buildImageEnabled
+            value: true
+    - name: "enableCMD"
+      schema:
+        type: boolean
+      display:
+        type: boolean
+        name:
+          zh-CN: "使用自定义命令"
+          en: "Enable Command"
+        description:
+          zh-CN: "使用自定义的命令执行构建"
+          en: "use command to build artifact"
+      default: false
+      required: false
+    - name: "cmd"
+      schema:
+        type: string
+      display:
+        type: shellscripts
+        name:
+          zh-CN: "使用自定义命令"
+          en: "Enable Command"
+        description:
+          zh-CN: "使用自定义的命令执行构建"
+          en: "use command to build artifact"
+      required: false
+      relation:
+        - action: show
+          when:
+            name: enableCMD
+            value: true
+    - name: "saveUnittestReport"
+      schema:
+        type: boolean
+      display:
+        type: boolean
+        name:
+          zh-CN: "保存单元测试报告"
+          en: "保存单元测试报告"
+        description:
+          zh-CN: "如果在自定义命令中执行了单元测试，则需要显示勾选保存测试报告"
+          en: "save Junit test report"
+      default: false
+      required: false
+      relation:
+        - action: show
+          when:
+            name: enableCMD
+            value: true
+    - name: "enableUnittest"
+      schema:
+        type: boolean
+      display:
+        type: boolean
+        name:
+          zh-CN: "开启单元测试"
+          en: "Enable Unittest"
+      default: true
+      required: false
+      relation:
+        - action: show
+          when:
+            name: enableCMD
+            value: false
+    - name: "enableDeployNexus"
+      schema:
+        type: boolean
+      display:
+        type: boolean
+        name:
+          zh-CN: "发布到Nexus"
+          en: "enableDeployNexus"
+      default: false
+      required: false
+      relation:
+        - action: show
+          when:
+            name: enableCMD
+            value: false
